@@ -43,9 +43,42 @@ import odc.algo
 import numpy as np
 import pandas as pd
 import xarray as xr
-from copy import deepcopy
 from collections import Counter
 from scipy.ndimage import binary_dilation
+
+
+def _split_dc_params(**kw):
+    """ Partition parameters meant for `dc.load(..)` into query-time and load-time.
+    Note that some parameters are used for both.
+
+    Returns
+    =======
+
+    (query: dict, load: dict)
+    """
+    _nothing = object()
+
+    def _impl(measurements=_nothing,
+              output_crs=_nothing,
+              resolution=_nothing,
+              resampling=_nothing,
+              skip_broken_datasets=_nothing,
+              dask_chunks=_nothing,
+              like=_nothing,
+              fuse_func=_nothing,
+              align=_nothing,
+              datasets=_nothing,
+              progress_cbk=_nothing,
+              **query):
+        if like is not _nothing:
+            query = dict(like=like, **query)
+
+        load_args = {k: v for k, v in locals().items() if v is not _nothing}
+        load_args.pop('query')
+
+        return query, load_args
+
+    return _impl(**kw)
 
 
 def load_ard(dc,
@@ -56,7 +89,7 @@ def load_ard(dc,
              mask_contiguity='nbart_contiguity',
              ls7_slc_off=True,
              filter_func=None,
-             **dcload_kwargs):
+             **extras):
 
     '''
     Loads Landsat Collection 3 or Sentinel 2 Definitive and Near Real
@@ -139,7 +172,7 @@ def load_ard(dc,
         For example, a filter function could be used to return True on
         only datasets acquired in January:
         `dataset.time.begin.month == 1`
-    **dcload_kwargs :
+    **extras :
         A set of keyword arguments to `dc.load` that define the
         spatiotemporal query used to extract data. This typically
         includes `measurements`, `x`, `y`, `time`, `resolution`,
@@ -163,17 +196,13 @@ def load_ard(dc,
     # Setup #
     #########
 
-    # To prevent modifications to dcload_kwargs being made by this
-    # function remaining after the function is run (potentially causing
-    # different results each time the function is run), first take a
-    # deep copy of the dcload_kwargs object.
-    dcload_kwargs = deepcopy(dcload_kwargs)
+    query, load_params = _split_dc_params(**extras)
 
-    # Determine if lazy loading is required
-    lazy_load = 'dask_chunks' in dcload_kwargs
+    # We deal with `dask_chunks` separately
+    dask_chunks = load_params.pop('dask_chunks', None)
 
     # Warn user if they combine lazy load with min_gooddata
-    if (min_gooddata > 0.0) & lazy_load:
+    if (min_gooddata > 0.0) and dask_chunks is not None:
         warnings.warn("Setting 'min_gooddata' percentage to > 0.0 "
                       "will cause dask arrays to compute when "
                       "loading pixel-quality data to calculate "
@@ -197,22 +226,19 @@ def load_ard(dc,
 
     # If `measurements` are specified but do not include fmask or
     # contiguity variables, add these to `measurements`
-    to_drop = []  # store loaded var names here to later drop
     fmask_band = 'fmask'
+    requested_measurements = load_params.pop('measurements', None)
+    measurements = requested_measurements.copy() if requested_measurements else None
 
-    if 'measurements' in dcload_kwargs:
-
-        if fmask_band not in dcload_kwargs['measurements']:
-            dcload_kwargs['measurements'].append(fmask_band)
-            to_drop.append(fmask_band)
+    if measurements:
+        if fmask_band not in measurements:
+            measurements.append(fmask_band)
 
         if mask_contiguity:
             if isinstance(mask_contiguity, bool):
                 mask_contiguity = "nbart_contiguity"  # TODO: nbart vs nbar
-
-            if mask_contiguity not in dcload_kwargs['measurements']:
-                dcload_kwargs['measurements'].append(mask_contiguity)
-                to_drop.append(mask_contiguity)
+            if mask_contiguity not in measurements:
+                measurements.append(mask_contiguity)
 
     # If no `measurements` are specified, Landsat ancillary bands are loaded
     # with a 'oa_' prefix, but Sentinel-2 bands are not. As a work-around,
@@ -228,8 +254,6 @@ def load_ard(dc,
 
     # Extract datasets for each product using subset of dcload_kwargs
     dataset_list = []
-    datasets_query = {k: v for k, v in dcload_kwargs.items()
-                      if k in ['time', 'x', 'y']}
 
     # Get list of datasets for each product
     print('Finding datasets')
@@ -237,7 +261,7 @@ def load_ard(dc,
 
         # Obtain list of datasets for product
         print(f'    {product}')
-        datasets = dc.find_datasets(product=product, **datasets_query)
+        datasets = dc.find_datasets(product=product, **query)
 
         # Remove Landsat 7 SLC-off observations if ls7_slc_off=False
         if not ls7_slc_off and product == 'ga_ls7e_ard_3':
@@ -269,17 +293,11 @@ def load_ard(dc,
     # Load data #
     #############
 
-    # If dask_chunks is specified, load data using dcload_kwargs only
-    if lazy_load:
-        ds = dc.load(datasets=dataset_list,
-                     **dcload_kwargs)
-
-    # If no dask chunks specified, add this param so that
+    # Note we always load using dask here so that
     # we can lazy load data before filtering by good data
-    else:
-        ds = dc.load(datasets=dataset_list,
-                     dask_chunks={},
-                     **dcload_kwargs)
+    ds = dc.load(datasets=dataset_list,
+                 dask_chunks={} if dask_chunks is None else dask_chunks,
+                 **load_params)
 
     ###############
     # Apply masks #
@@ -332,7 +350,8 @@ def load_ard(dc,
               f'good quality pixels')
 
     # Drop bands not originally requested by user
-    ds = ds.drop(to_drop)
+    if requested_measurements:
+        ds = ds[requested_measurements]
 
     ###############
     # Return data #
@@ -342,12 +361,11 @@ def load_ard(dc,
     # use when converting data to a float32 dtype
     ds = odc.algo.to_f32(ds)
 
-    # If `lazy_load` is True, return data as a dask array without
+    # If user supplied dask_chunks, return data as a dask array without
     # actually loading it in
-    if lazy_load:
+    if dask_chunks is not None:
         print(f'Returning {len(ds.time)} time steps as a dask array')
         return ds
-
     else:
         print(f'Loading {len(ds.time)} time steps')
         return ds.compute()
