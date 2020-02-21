@@ -73,7 +73,7 @@ def _split_dc_params(**kw):
         load_args = {k: v for k, v in locals().items() if v is not _nothing}
         load_args.pop('query')
 
-        for k in ['x', 'y', 'lat', 'lon', 'geopolygon', 'like']:
+        for k in ['x', 'y', 'lat', 'lon', 'geopolygon', 'like', 'crs']:
             v = query.get(k, _nothing)
             if v is not _nothing:
                 load_args[k] = v
