@@ -47,38 +47,28 @@ from collections import Counter
 from scipy.ndimage import binary_dilation
 
 
-def _split_dc_params(**kw):
-    """ Partition parameters meant for `dc.load(..)` into query-time and load-time.
-    Note that some parameters are used for both.
+def _dc_query_only(**kw):
+    """ Remove load-only parameters, the rest can be passed to Query
 
     Returns
     =======
 
-    (query: dict, load: dict)
+    dict of query parameters
     """
-    _nothing = object()
 
-    def _impl(measurements=_nothing,
-              output_crs=_nothing,
-              resolution=_nothing,
-              resampling=_nothing,
-              skip_broken_datasets=_nothing,
-              dask_chunks=_nothing,
-              fuse_func=_nothing,
-              align=_nothing,
-              datasets=_nothing,
-              progress_cbk=_nothing,
+    def _impl(measurements=None,
+              output_crs=None,
+              resolution=None,
+              resampling=None,
+              skip_broken_datasets=None,
+              dask_chunks=None,
+              fuse_func=None,
+              align=None,
+              datasets=None,
+              progress_cbk=None,
+              group_by=None,
               **query):
-
-        load_args = {k: v for k, v in locals().items() if v is not _nothing}
-        load_args.pop('query')
-
-        for k in ['x', 'y', 'lat', 'lon', 'geopolygon', 'like', 'crs']:
-            v = query.get(k, _nothing)
-            if v is not _nothing:
-                load_args[k] = v
-
-        return query, load_args
+        return query
 
     return _impl(**kw)
 
@@ -198,10 +188,11 @@ def load_ard(dc,
     # Setup #
     #########
 
-    query, load_params = _split_dc_params(**extras)
+    query = _dc_query_only(**extras)
 
     # We deal with `dask_chunks` separately
-    dask_chunks = load_params.pop('dask_chunks', None)
+    dask_chunks = extras.pop('dask_chunks', None)
+    requested_measurements = extras.pop('measurements', None)
 
     # Warn user if they combine lazy load with min_gooddata
     if (min_gooddata > 0.0) and dask_chunks is not None:
@@ -229,7 +220,6 @@ def load_ard(dc,
     # If `measurements` are specified but do not include fmask or
     # contiguity variables, add these to `measurements`
     fmask_band = 'fmask'
-    requested_measurements = load_params.pop('measurements', None)
     measurements = requested_measurements.copy() if requested_measurements else None
 
     if measurements:
@@ -300,7 +290,7 @@ def load_ard(dc,
     ds = dc.load(datasets=dataset_list,
                  measurements=measurements,
                  dask_chunks={} if dask_chunks is None else dask_chunks,
-                 **load_params)
+                 **extras)
 
     ###############
     # Apply masks #
