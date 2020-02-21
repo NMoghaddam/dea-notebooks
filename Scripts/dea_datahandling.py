@@ -296,6 +296,7 @@ def load_ard(dc,
     # Note we always load using dask here so that
     # we can lazy load data before filtering by good data
     ds = dc.load(datasets=dataset_list,
+                 measurements=measurements,
                  dask_chunks={} if dask_chunks is None else dask_chunks,
                  **load_params)
 
