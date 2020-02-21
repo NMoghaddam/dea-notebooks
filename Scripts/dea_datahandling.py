@@ -64,17 +64,19 @@ def _split_dc_params(**kw):
               resampling=_nothing,
               skip_broken_datasets=_nothing,
               dask_chunks=_nothing,
-              like=_nothing,
               fuse_func=_nothing,
               align=_nothing,
               datasets=_nothing,
               progress_cbk=_nothing,
               **query):
-        if like is not _nothing:
-            query = dict(like=like, **query)
 
         load_args = {k: v for k, v in locals().items() if v is not _nothing}
         load_args.pop('query')
+
+        for k in ['x', 'y', 'lat', 'lon', 'geopolygon', 'like']:
+            v = query.get(k, _nothing)
+            if v is not _nothing:
+                load_args[k] = v
 
         return query, load_args
 
